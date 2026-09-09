@@ -579,6 +579,13 @@ Vercel's GitHub App must have access to the repository before a project can be
 linked. In GitHub → Settings → Applications → Vercel → Configure, grant access
 to this repository, then import it in Vercel.
 
+`vercel.json` pins `framework: "nextjs"` deliberately. Importing this repository
+before the application existed on the production branch left Vercel with no
+framework detected, so it treated the build as a static site and failed with
+*No Output Directory named "public" found after the Build completed* — the build
+itself had succeeded. Committing the framework means detection cannot drift
+again, and it overrides whatever the dashboard inferred.
+
 Set these environment variables for **all** environments:
 
 | Variable | Value |
