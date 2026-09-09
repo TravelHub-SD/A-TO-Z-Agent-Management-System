@@ -2,10 +2,11 @@
   "name": "atoz-agent-management-system",
   "version": "1.0.0",
   "private": true,
-  "description": "A TO Z — Agent Management System. Internal platform for managing external travel agents, tickets, payments and statements.",
+  "description": "A TO Z \u2014 Agent Management System. Internal platform for managing external travel agents, tickets, payments and statements.",
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
+    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
