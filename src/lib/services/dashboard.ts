@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { TicketStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getSettings } from "@/lib/services/settings";
@@ -14,7 +15,7 @@ import type {
  * Every figure here is aggregated by the database. Nothing loads whole tables
  * into memory, so the dashboard stays fast as ticket volume grows.
  */
-export async function getDashboardStats(): Promise<DashboardStats> {
+export const getDashboardStats = cache(async (): Promise<DashboardStats> => {
   const settings = await getSettings();
 
   const now = new Date();
@@ -79,10 +80,10 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     ticketsThisMonth,
     overdueTickets,
   };
-}
+});
 
 /** Billed vs collected over the last `months` calendar months. */
-export async function getMonthlyTrend(months = 6): Promise<MonthlyPoint[]> {
+export const getMonthlyTrend = cache(async (months = 6): Promise<MonthlyPoint[]> => {
   const now = new Date();
   const start = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1),
@@ -126,10 +127,10 @@ export async function getMonthlyTrend(months = 6): Promise<MonthlyPoint[]> {
     });
   }
   return points;
-}
+});
 
 /** Agents holding the largest unpaid balances — "who owes us money". */
-export async function getTopOutstandingAgents(limit = 5): Promise<TopAgentPoint[]> {
+export const getTopOutstandingAgents = cache(async (limit = 5): Promise<TopAgentPoint[]> => {
   const grouped = await prisma.ticket.groupBy({
     by: ["agentId"],
     where: { status: TicketStatus.UNPAID },
@@ -155,7 +156,7 @@ export async function getTopOutstandingAgents(limit = 5): Promise<TopAgentPoint[
       outstanding: toMoneyString(g._sum.amount ?? 0),
     };
   });
-}
+});
 
 export async function getRecentTickets(limit = 8) {
   const page = await listTickets({ page: 1, pageSize: limit, sort: "createdAt", dir: "desc" });
