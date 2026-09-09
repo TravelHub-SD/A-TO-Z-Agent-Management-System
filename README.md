@@ -517,3 +517,86 @@ The build was verified end to end against a real PostgreSQL database:
   concurrency and export checks — 70 assertions, all passing.
 - All pages were loaded in Chromium at 1440×900 and 390×844 with zero console
   errors, zero failed requests and no horizontal overflow.
+
+---
+
+## 19. Deploying to Vercel + Supabase
+
+The preview deployment uses a Supabase Postgres database and a Vercel Node
+runtime. Prisma migrations are committed, so the database is reproducible.
+
+### 1. Database
+
+Create a Supabase project, then apply the schema. If your machine can reach
+Postgres directly:
+
+```bash
+DATABASE_URL="<session-pooler-url>" npx prisma migrate deploy
+DATABASE_URL="<session-pooler-url>" npm run db:seed
+```
+
+If outbound Postgres is blocked (as in some CI/sandbox environments), apply
+`prisma/migrations/*/migration.sql` through the Supabase SQL editor instead,
+then insert a matching row into `_prisma_migrations` so future
+`prisma migrate deploy` runs stay no-ops.
+
+Prefer a dedicated least-privilege login role over the `postgres` superuser:
+
+```sql
+CREATE ROLE atoz_app WITH LOGIN PASSWORD '<strong-password>'
+  NOSUPERUSER NOCREATEDB NOCREATEROLE;
+GRANT USAGE, CREATE ON SCHEMA public TO atoz_app;
+GRANT ALL ON ALL TABLES    IN SCHEMA public TO atoz_app;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO atoz_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO atoz_app;
+```
+
+### 2. Connection string
+
+Vercel functions must use Supabase's **transaction-mode pooler**, not the
+direct database host:
+
+```
+postgresql://atoz_app.<project-ref>:<password>@aws-N-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1&sslmode=require
+```
+
+- `pgbouncer=true` disables prepared statements, which transaction pooling
+  cannot hold across statements.
+- `connection_limit=1` keeps each serverless invocation to a single connection.
+- The direct host (`db.<ref>.supabase.co`) is **IPv6-only** and is not reliably
+  reachable from Vercel. The pooler is IPv4.
+- The `aws-N` prefix is assigned per project. Copy the exact host from
+  Supabase → Project Settings → Database → Connection string → Transaction
+  pooler rather than guessing.
+
+The app's interactive transactions (including the `SELECT … FOR UPDATE` that
+guards payment recording) work over transaction pooling, because the pooler
+holds one server connection for the duration of a transaction.
+
+### 3. Vercel project
+
+Vercel's GitHub App must have access to the repository before a project can be
+linked. In GitHub → Settings → Applications → Vercel → Configure, grant access
+to this repository, then import it in Vercel.
+
+Set these environment variables for **all** environments:
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | the transaction-pooler URL above |
+| `AUTH_SECRET` | 32+ random characters (`openssl rand -base64 48`) |
+| `AUTH_SESSION_MAX_AGE_HOURS` | `12` (optional) |
+
+Do **not** set `APP_ORIGIN` for preview deployments. The same-origin check
+derives the origin from the forwarded `Host` header, which is what allows it to
+work across every generated preview URL; pinning `APP_ORIGIN` to one hostname
+would reject requests from the others.
+
+No build-time database access is required — every page is `force-dynamic` and
+`prisma generate` does not connect — so the build succeeds before the
+environment variables are present. It just cannot serve requests until they are.
+
+### 4. After deploying
+
+Change the seeded passwords from **Settings → Users**, and consider enabling
+Vercel Deployment Protection if the preview should not be publicly reachable.
