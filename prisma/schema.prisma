@@ -1,0 +1,178 @@
+// A TO Z — Agent Management System
+// PostgreSQL schema. External travel agents are records managed by A TO Z
+// staff; they never authenticate. Only internal users exist in `users`.
+
+generator client {
+  provider = "prisma-client-js"
+  // "native" covers local development; the rhel target is the engine
+  // Vercel's Node runtime (Amazon Linux, OpenSSL 3) loads at request time.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  STAFF
+}
+
+enum TicketStatus {
+  UNPAID
+  PAID
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  LOGIN_FAILED
+  USER_CREATED
+  USER_UPDATED
+  CREATE_AGENT
+  UPDATE_AGENT
+  CREATE_TICKET
+  UPDATE_TICKET
+  DELETE_TICKET
+  MARK_TICKET_PAID
+  CREATE_PAYMENT
+  UPDATE_PAYMENT
+  REVERSE_PAYMENT
+  UPDATE_SETTINGS
+}
+
+enum AuditEntity {
+  USER
+  AGENT
+  TICKET
+  PAYMENT
+  SETTINGS
+  SESSION
+}
+
+/// Internal A TO Z staff and administrators. There is no public registration:
+/// accounts are provisioned by an ADMIN from Settings → Users.
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  name         String    @db.VarChar(120)
+  email        String    @unique @db.VarChar(180)
+  passwordHash String    @map("password_hash") @db.VarChar(120)
+  role         Role      @default(STAFF)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  ticketsCreated Ticket[]   @relation("TicketCreatedBy")
+  paymentsTaken  Payment[]  @relation("PaymentPaidBy")
+  auditLogs      AuditLog[]
+
+  @@index([role])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("users")
+}
+
+/// External travel agents. Records only — no credentials, no portal access.
+model Agent {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(160)
+  code      String   @unique @db.VarChar(40)
+  phone     String?  @db.VarChar(40)
+  email     String?  @db.VarChar(180)
+  notes     String?  @db.Text
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tickets Ticket[]
+
+  @@index([name])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("agents")
+}
+
+/// A ticket issued on behalf of an agent. Amount is what the agent owes A TO Z.
+model Ticket {
+  id        String       @id @default(uuid()) @db.Uuid
+  agentId   String       @map("agent_id") @db.Uuid
+  pnr       String       @db.VarChar(20)
+  amount    Decimal      @db.Decimal(18, 2)
+  currency  String       @default("SDG") @db.VarChar(3)
+  status    TicketStatus @default(UNPAID)
+  notes     String?      @db.Text
+  createdBy String       @map("created_by") @db.Uuid
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  agent   Agent    @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  creator User     @relation("TicketCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  payment Payment?
+
+  @@index([pnr])
+  @@index([agentId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([agentId, status])
+  @@map("tickets")
+}
+
+/// Money received from an agent for a ticket. Version 1: exactly one payment
+/// per ticket (`ticket_id` is UNIQUE) and the amount must equal the ticket's.
+model Payment {
+  id                String   @id @default(uuid()) @db.Uuid
+  ticketId          String   @unique @map("ticket_id") @db.Uuid
+  transactionNumber String   @unique @map("transaction_number") @db.VarChar(4)
+  amount            Decimal  @db.Decimal(18, 2)
+  currency          String   @default("SDG") @db.VarChar(3)
+  notes             String?  @db.Text
+  paidBy            String   @map("paid_by") @db.Uuid
+  paidAt            DateTime @map("paid_at") @db.Timestamptz(3)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation("PaymentPaidBy", fields: [paidBy], references: [id], onDelete: Restrict)
+
+  @@index([paidAt])
+  @@index([paidBy])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+/// Append-only audit trail. `oldValues`/`newValues` hold JSONB snapshots for
+/// state changes so any financial action can be reconstructed after the fact.
+model AuditLog {
+  id         String      @id @default(uuid()) @db.Uuid
+  userId     String?     @map("user_id") @db.Uuid
+  action     AuditAction
+  entityType AuditEntity @map("entity_type")
+  entityId   String?     @map("entity_id") @db.Uuid
+  summary    String      @db.VarChar(400)
+  oldValues  Json?       @map("old_values") @db.JsonB
+  newValues  Json?       @map("new_values") @db.JsonB
+  ipAddress  String?     @map("ip_address") @db.VarChar(64)
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// Single-row agency configuration (id is pinned to "global").
+model SystemSettings {
+  id                      String   @id @default("global")
+  agencyName              String   @default("A TO Z Travel") @map("agency_name") @db.VarChar(160)
+  defaultCurrency         String   @default("SDG") @map("default_currency") @db.VarChar(3)
+  timezone                String   @default("Africa/Khartoum") @db.VarChar(64)
+  outstandingWarnDays     Int      @default(14) @map("outstanding_warn_days")
+  outstandingCriticalDays Int      @default(30) @map("outstanding_critical_days")
+  updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("system_settings")
+}
